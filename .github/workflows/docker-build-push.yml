@@ -83,7 +83,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90   # ✅ FIX: était 25, insuffisant pour l'émulation ARM64 via QEMU
     strategy:
-      matrix: ${{ fromJSON(needs.determine-build-context.outputs.build_matrix) }}
+      matrix: 
+        include:
+          - platform: amd64
+            docker_platform: linux/amd64
+          - platform: arm64
+            docker_platform: linux/arm64
     outputs:
       image_ref: ${{ steps.determine-tags.outputs.n8n_primary_tag }}
       primary_ghcr_manifest_tag: ${{ steps.determine-tags.outputs.n8n_primary_tag }}
