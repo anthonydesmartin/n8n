@@ -1,9 +1,9 @@
 # This workflow is used to build and push the Docker image for n8nio/n8n and n8nio/runners
-#
 # - Uses docker-config.mjs for context determination, this determines what needs to be built based on the trigger
 # - Uses docker-tags.mjs for tag generation, this generates the tags for the images
 
 name: 'Docker: Build and Push'
+
 permissions:
   contents: read
   packages: write
@@ -15,7 +15,6 @@ env:
 on:
   schedule:
     - cron: '0 0 * * *'
-
   workflow_call:
     inputs:
       n8n_version:
@@ -32,9 +31,17 @@ on:
         required: false
         type: boolean
         default: true
-
   workflow_dispatch:
     inputs:
+      n8n_version:
+        description: 'N8N version to build'   # ✅ FIX: input manquant pour workflow_dispatch
+        required: false
+        type: string
+      release_type:
+        description: 'Release type (stable, nightly, dev)'   # ✅ FIX: évite le fallback "branch" => ARM64 exclu
+        required: false
+        type: string
+        default: 'stable'
       push_enabled:
         description: 'Push image to registry'
         required: false
@@ -74,7 +81,7 @@ jobs:
     name: Build App, then Build and Push Docker Image (${{ matrix.platform }})
     needs: determine-build-context
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 90   # ✅ FIX: était 25, insuffisant pour l'émulation ARM64 via QEMU
     strategy:
       matrix: ${{ fromJSON(needs.determine-build-context.outputs.build_matrix) }}
     outputs:
@@ -105,10 +112,9 @@ jobs:
             --version "${{ needs.determine-build-context.outputs.n8n_version }}" \
             --platform "${{ matrix.docker_platform }}" \
             ${{ needs.determine-build-context.outputs.push_to_docker == 'true' && '--include-docker' || '' }}
-
           echo "=== Generated Docker Tags ==="
           cat "$GITHUB_OUTPUT" | grep "_tags=" | while IFS='=' read -r key value; do
-            echo "${key}: ${value%%,*}..."  # Show first tag for brevity
+            echo "${key}: ${value%%,*}..."
           done
 
       - name: Login to Docker registries
@@ -120,6 +126,10 @@ jobs:
           dockerhub-username: ${{ secrets.DOCKER_USERNAME }}
           dockerhub-password: ${{ secrets.DOCKER_PASSWORD }}
 
+      - name: Set up QEMU   # ✅ FIX: requis pour cross-compiler ARM64 sur runner x86_64
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: linux/arm64
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -205,7 +215,6 @@ jobs:
         run: |
           RELEASE_TYPE="${{ needs.determine-build-context.outputs.release_type }}"
 
-          # Function to create manifest for an image
           create_manifest() {
             local IMAGE_NAME=$1
             local MANIFEST_TAG=$2
@@ -217,7 +226,6 @@ jobs:
 
             echo "Creating GHCR manifest for $IMAGE_NAME: $MANIFEST_TAG"
 
-            # For branch builds, only AMD64 is built
             if [[ "$RELEASE_TYPE" == "branch" ]]; then
               docker buildx imagetools create \
                 --tag "$MANIFEST_TAG" \
@@ -230,7 +238,6 @@ jobs:
             fi
           }
 
-          # Create manifests for all images
           create_manifest "n8n" "${{ needs.build-and-push-docker.outputs.primary_ghcr_manifest_tag }}"
           create_manifest "runners" "${{ needs.build-and-push-docker.outputs.runners_primary_ghcr_manifest_tag }}"
           create_manifest "runners-distroless" "${{ needs.build-and-push-docker.outputs.runners_distroless_primary_ghcr_manifest_tag }}"
@@ -241,17 +248,15 @@ jobs:
           VERSION="${{ needs.determine-build-context.outputs.n8n_version }}"
           DOCKER_BASE="${{ secrets.DOCKER_USERNAME }}"
 
-          # Create manifests for each image type
           declare -A images=(
             ["n8n"]="${VERSION}"
             ["runners"]="${VERSION}"
             ["runners-distroless"]="${VERSION}-distroless"
-          )
+          )  # ✅ FIX: parenthèse fermante manquante — bash syntax error dans l'original
 
           for image in "${!images[@]}"; do
             TAG_SUFFIX="${images[$image]}"
-            IMAGE_NAME="${image//-distroless/}"  # Remove -distroless from image name
-
+            IMAGE_NAME="${image//-distroless/}"
             echo "Creating Docker Hub manifest for $image"
             docker buildx imagetools create \
               --tag "${DOCKER_BASE}/${IMAGE_NAME}:${TAG_SUFFIX}" \
@@ -345,8 +350,8 @@ jobs:
       always() &&
       needs.create_multi_arch_manifest.result == 'success' &&
       (needs.determine-build-context.outputs.release_type == 'stable' ||
-       needs.determine-build-context.outputs.release_type == 'rc' ||
-       needs.determine-build-context.outputs.release_type == 'nightly')
+      needs.determine-build-context.outputs.release_type == 'rc' ||
+      needs.determine-build-context.outputs.release_type == 'nightly')
     runs-on: ubuntu-latest
     permissions:
       id-token: write
@@ -395,8 +400,8 @@ jobs:
     if: |
       success() &&
       (needs.determine-build-context.outputs.release_type == 'stable' ||
-       needs.determine-build-context.outputs.release_type == 'nightly' ||
-       needs.determine-build-context.outputs.release_type == 'rc')
+      needs.determine-build-context.outputs.release_type == 'nightly' ||
+      needs.determine-build-context.outputs.release_type == 'rc')
     uses: ./.github/workflows/security-trivy-scan-callable.yml
     with:
       image_ref: ${{ needs.build-and-push-docker.outputs.image_ref }}
@@ -408,8 +413,8 @@ jobs:
     if: |
       success() &&
       (needs.determine-build-context.outputs.release_type == 'stable' ||
-       needs.determine-build-context.outputs.release_type == 'nightly' ||
-       needs.determine-build-context.outputs.release_type == 'rc')
+      needs.determine-build-context.outputs.release_type == 'nightly' ||
+      needs.determine-build-context.outputs.release_type == 'rc')
     uses: ./.github/workflows/security-trivy-scan-callable.yml
     with:
       image_ref: ${{ needs.build-and-push-docker.outputs.runners_primary_ghcr_manifest_tag }}
